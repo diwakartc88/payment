@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="CompilerConfiguration">
+    <annotationProcessing>
+      <profile name="Maven default annotation processors profile" enabled="true">
+        <sourceOutputDir name="target/generated-sources/annotations" />
+        <sourceTestOutputDir name="target/generated-test-sources/test-annotations" />
+        <outputRelativeToContentRoot value="true" />
+        <module name="fraud-detection-service" />
+        <module name="ledger-service" />
+        <module name="api-gateway" />
+        <module name="authorization-service" />
+        <module name="settlement-service" />
+        <module name="payment-ingestion-service" />
+        <module name="common-events" />
+        <module name="notification-service" />
+      </profile>
+    </annotationProcessing>
+  </component>
+  <component name="JavacSettings">
+    <option name="ADDITIONAL_OPTIONS_OVERRIDE">
+      <module name="api-gateway" options="-parameters" />
+      <module name="authorization-service" options="-parameters" />
+      <module name="common-events" options="-parameters" />
+      <module name="fraud-detection-service" options="-parameters" />
+      <module name="ledger-service" options="-parameters" />
+      <module name="notification-service" options="-parameters" />
+      <module name="payment-ingestion-service" options="-parameters" />
+      <module name="settlement-service" options="-parameters" />
+    </option>
+  </component>
+</project>

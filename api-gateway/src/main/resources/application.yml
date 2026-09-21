@@ -1,0 +1,48 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: api-gateway
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+  cloud:
+    gateway:
+      routes:
+        - id: payment-ingestion
+          uri: ${INGESTION_SERVICE_URI:http://localhost:8081}
+          predicates:
+            - Path=/api/v1/payments/**
+          filters:
+            # Redis-backed token bucket: protects downstream services from
+            # bursts. At production scale this moves to a distributed limiter
+            # tuned per merchant/API-key, not a single global bucket.
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 500
+                redis-rate-limiter.burstCapacity: 1000
+                redis-rate-limiter.requestedTokens: 1
+            - name: CircuitBreaker
+              args:
+                name: paymentIngestionCB
+                fallbackUri: forward:/fallback/payments
+        # notification-service is a pure Kafka consumer in this reference
+        # implementation (it dispatches outbound webhooks; see WebhookDispatcher)
+        # and exposes no inbound API, so it has no route here. A production
+        # build would add one once it grows a merchant-facing "notification
+        # history / resend" endpoint.
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,gateway
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  pattern:
+    level: "%5p [traceId=%X{traceId:-}]"

@@ -1,0 +1,198 @@
+name: payment-gateway
+
+# Default (`docker compose up`) starts only infrastructure: Kafka, Postgres,
+# Redis, and Kafka UI. Run the Spring Boot services locally against that
+# infra with `mvn -pl <module> spring-boot:run` (see README.md) -- much
+# faster edit/run loop than rebuilding containers.
+#
+# To run the whole thing containerized instead, first `mvn clean package`
+# at the repo root, then:
+#   docker compose --profile apps up --build
+
+services:
+  kafka:
+    image: apache/kafka:3.8.0
+    container_name: payment-gateway-kafka
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:29092,CONTROLLER://:29093,EXTERNAL://:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,EXTERNAL://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:29093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      CLUSTER_ID: "cGF5bWVudC1nYXRld2F5LWty" # arbitrary fixed base64 id for local dev
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+      - ./scripts/create-topics.sh:/scripts/create-topics.sh:ro
+    healthcheck:
+      test: ["CMD", "/opt/kafka/bin/kafka-broker-api-versions.sh", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  kafka-init:
+    image: apache/kafka:3.8.0
+    container_name: payment-gateway-kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    volumes:
+      - ./scripts/create-topics.sh:/scripts/create-topics.sh:ro
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+    entrypoint: ["/bin/bash", "/scripts/create-topics.sh"]
+    restart: "no"
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: payment-gateway-kafka-ui
+    ports:
+      - "8090:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: payment-gateway-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: payment_app
+      POSTGRES_PASSWORD: payment_app
+      POSTGRES_DB: postgres
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./scripts/init-multiple-postgres-databases.sh:/docker-entrypoint-initdb.d/init-multiple-postgres-databases.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U payment_app"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: payment-gateway-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ---- Application services (docker compose --profile apps up --build) ----
+
+  api-gateway:
+    profiles: ["apps"]
+    build: ./api-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      REDIS_HOST: redis
+      INGESTION_SERVICE_URI: http://payment-ingestion-service:8081
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  payment-ingestion-service:
+    profiles: ["apps"]
+    build: ./payment-ingestion-service
+    ports:
+      - "8081:8081"
+    environment:
+      DB_HOST: postgres
+      DB_NAME: ingestion_db
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+
+  fraud-detection-service:
+    profiles: ["apps"]
+    build: ./fraud-detection-service
+    ports:
+      - "8082:8082"
+    environment:
+      REDIS_HOST: redis
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+    depends_on:
+      redis:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+
+  authorization-service:
+    profiles: ["apps"]
+    build: ./authorization-service
+    ports:
+      - "8083:8083"
+    environment:
+      REDIS_HOST: redis
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+    depends_on:
+      redis:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+
+  ledger-service:
+    profiles: ["apps"]
+    build: ./ledger-service
+    ports:
+      - "8084:8084"
+    environment:
+      DB_HOST: postgres
+      DB_NAME: ledger_db
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+
+  settlement-service:
+    profiles: ["apps"]
+    build: ./settlement-service
+    ports:
+      - "8085:8085"
+    environment:
+      DB_HOST: postgres
+      DB_NAME: settlement_db
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      SETTLEMENT_BATCH_INTERVAL_MS: 30000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+
+  notification-service:
+    profiles: ["apps"]
+    build: ./notification-service
+    ports:
+      - "8086:8086"
+    environment:
+      REDIS_HOST: redis
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+    depends_on:
+      redis:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+
+volumes:
+  kafka-data:
+  postgres-data:
